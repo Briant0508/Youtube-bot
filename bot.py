@@ -156,7 +156,7 @@ def main():
     app.add_handler(CommandHandler("nota", nota))
     app.add_handler(CommandHandler("buscar", buscar))
     app.add_handler(CommandHandler("archivos", archivos))
-    app.add_handler(MessageHandler(filters.Document.ALL | filters.Video.ALL | filters.PHOTO, guardar_archivo))
+    app.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.PHOTO, guardar_archivo))
     app.add_handler(CallbackQueryHandler(manejar_fecha, pattern="^fecha_"))
     app.add_handler(CallbackQueryHandler(manejar_botones, pattern="^(completar|eliminar)_"))
     app.add_handler(CallbackQueryHandler(manejar_descargas, pattern="^descargar_"))
