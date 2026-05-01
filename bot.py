@@ -9,7 +9,8 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 data = {"tareas": [], "notas": [], "archivos": []}
 
-app = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# Usamos sesión en memoria para evitar SQLite en HostingGuru
+app = Client(":memory:", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # --- Bienvenida ---
 @app.on_message(filters.command("start"))
