@@ -1,15 +1,19 @@
 import os
 import datetime
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from pyrogram import Client, filters
 
-TOKEN = os.getenv("TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))  # ID del canal privado
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 data = {"tareas": [], "notas": [], "archivos": []}
 
+app = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
 # --- Bienvenida ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@app.on_message(filters.command("start"))
+async def start(client, message):
     texto = (
         "👋 Bienvenido al Bot de Productividad.\n\n"
         "📅 Gestión de tareas:\n"
@@ -21,57 +25,85 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /archivos → ver todos los archivos guardados\n\n"
         "Los datos se guardan en el canal privado."
     )
-    await update.message.reply_text(texto)
+    await message.reply_text(texto)
 
 # --- Añadir tarea ---
-async def nueva_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("✍️ Escribe el nombre de la tarea después de /tarea")
+@app.on_message(filters.command("tarea"))
+async def nueva_tarea(client, message):
+    if len(message.command) < 2:
+        await message.reply_text("✍️ Escribe el nombre de la tarea después de /tarea")
         return
-    texto = " ".join(context.args)
+    texto = " ".join(message.command[1:])
     hoy = datetime.date.today()
-    botones = []
-    for i in range(10):
-        dia = hoy + datetime.timedelta(days=i)
-        botones.append([InlineKeyboardButton(dia.strftime("%d-%m-%Y"), callback_data=f"fecha_{dia}_{texto}")])
-    reply_markup = InlineKeyboardMarkup(botones)
-    await update.message.reply_text("📅 Selecciona la fecha límite:", reply_markup=reply_markup)
-
-async def manejar_fecha(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    _, fecha_str, texto = query.data.split("_", 2)
-    tarea = {"texto": texto, "fecha": fecha_str, "completada": False}
+    fecha = hoy.strftime("%d-%m-%Y")
+    tarea = {"texto": texto, "fecha": fecha, "completada": False}
     data["tareas"].append(tarea)
-    # Guardar en canal
-    await query.message.bot.send_message(CHANNEL_ID, f"TAREA|{texto}|{fecha_str}|False")
-    await query.edit_message_text(f"✅ Tarea añadida: *{texto}* (vence {fecha_str})")
+    await client.send_message(CHANNEL_ID, f"TAREA|{texto}|{fecha}|False")
+    await message.reply_text(f"✅ Tarea añadida: {texto} (vence {fecha})")
+
+@app.on_message(filters.command("listado"))
+async def listado(client, message):
+    if not data["tareas"]:
+        await message.reply_text("📭 No tienes tareas pendientes.")
+        return
+    texto = "\n".join([f"{i+1}. {t['texto']} - vence {t['fecha']} [{'✔️' if t['completada'] else '❌'}]" for i, t in enumerate(data["tareas"])])
+    await message.reply_text(texto)
 
 # --- Notas ---
-async def nota(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("✍️ Escribe el texto después de /nota")
+@app.on_message(filters.command("nota"))
+async def nota(client, message):
+    if len(message.command) < 2:
+        await message.reply_text("✍️ Escribe el texto después de /nota")
         return
-    texto = " ".join(context.args)
+    texto = " ".join(message.command[1:])
     data["notas"].append(texto)
-    # Guardar en canal
-    await update.message.bot.send_message(CHANNEL_ID, f"NOTA|{texto}")
-    await update.message.reply_text(f"✅ Nota guardada: {texto}")
+    await client.send_message(CHANNEL_ID, f"NOTA|{texto}")
+    await message.reply_text(f"✅ Nota guardada: {texto}")
 
 # --- Guardar archivos ---
-async def guardar_archivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    archivo = update.message.document or update.message.video or update.message.photo[-1]
-    entrada = {"file_id": archivo.file_id, "caption": update.message.caption or ""}
+@app.on_message(filters.document | filters.video | filters.photo)
+async def guardar_archivo(client, message):
+    archivo = message.document or message.video or message.photo
+    entrada = {"file_id": archivo.file_id, "caption": message.caption or ""}
     data["archivos"].append(entrada)
-    # Guardar en canal
-    await update.message.bot.send_message(CHANNEL_ID, f"ARCHIVO|{entrada['file_id']}|{entrada['caption']}")
-    await update.message.reply_text("📂 Archivo guardado correctamente.")
+    await client.send_message(CHANNEL_ID, f"ARCHIVO|{entrada['file_id']}|{entrada['caption']}")
+    await message.reply_text("📂 Archivo guardado correctamente.")
 
-# --- Reconstrucción al iniciar ---
-async def reconstruir_memoria(app: Application):
-    # Leer últimos mensajes del canal
-    mensajes = await app.bot.get_chat_history(CHANNEL_ID, limit=100)
-    for msg in mensajes:
+# --- Listar archivos ---
+@app.on_message(filters.command("archivos"))
+async def archivos(client, message):
+    if not data["archivos"]:
+        await message.reply_text("📭 No tienes archivos guardados.")
+        return
+    texto = "\n".join([f"{i+1}. {f['caption']}" for i, f in enumerate(data["archivos"])])
+    await message.reply_text("📂 Archivos guardados:\n" + texto)
+
+# --- Buscar ---
+@app.on_message(filters.command("buscar"))
+async def buscar(client, message):
+    if len(message.command) < 2:
+        await message.reply_text("🔍 Uso: /buscar <palabra>")
+        return
+    palabra = " ".join(message.command[1:]).lower()
+    notas = [n for n in data["notas"] if palabra in n.lower()]
+    archivos = [f for f in data["archivos"] if palabra in f["caption"].lower()]
+
+    if not notas and not archivos:
+        await message.reply_text("❌ No encontré coincidencias.")
+        return
+
+    if notas:
+        texto = "📋 Notas encontradas:\n" + "\n".join([f"- {n}" for n in notas])
+        await message.reply_text(texto)
+
+    if archivos:
+        texto = "📂 Archivos encontrados:\n" + "\n".join([f"- {f['caption']}" for f in archivos])
+        await message.reply_text(texto)
+
+# --- Reconstrucción desde el canal ---
+@app.on_message(filters.command("reconstruir"))
+async def reconstruir(client, message):
+    async for msg in client.get_chat_history(CHANNEL_ID, limit=200):
         if msg.text and msg.text.startswith("TAREA|"):
             _, texto, fecha, estado = msg.text.split("|")
             data["tareas"].append({"texto": texto, "fecha": fecha, "completada": estado == "True"})
@@ -81,20 +113,6 @@ async def reconstruir_memoria(app: Application):
         elif msg.text and msg.text.startswith("ARCHIVO|"):
             _, file_id, caption = msg.text.split("|", 2)
             data["archivos"].append({"file_id": file_id, "caption": caption})
+    await message.reply_text("✅ Memoria reconstruida desde el canal.")
 
-def main():
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("tarea", nueva_tarea))
-    app.add_handler(CommandHandler("nota", nota))
-    app.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.PHOTO, guardar_archivo))
-    app.add_handler(CallbackQueryHandler(manejar_fecha, pattern="^fecha_"))
-
-    # Reconstruir memoria al iniciar
-    app.post_init = lambda _: reconstruir_memoria(app)
-
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+app.run()
