@@ -51,7 +51,7 @@ async def nueva_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def manejar_fecha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # <-- evita el mensaje "El bot no responde"
+    await query.answer()  # evita el mensaje "El bot no responde"
     _, fecha_str, texto = query.data.split("_", 2)
     fecha = datetime.datetime.strptime(fecha_str, "%Y-%m-%d")
     tarea = {"texto": texto, "fecha": fecha_str, "completada": False}
@@ -115,8 +115,8 @@ async def archivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     botones = []
     for i, f in enumerate(data["archivos"], start=1):
         botones.append([
-            InlineKeyboardButton(f"📂 Archivo {i} {f['caption']}", callback_data=f"descargar_{i-1}"),
-            InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_archivo_{i-1}")
+            InlineKeyboardButton(f"📂 Archivo {i} {f['caption']}", callback_data=f"descargar_{i}"),
+            InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{i}")
         ])
     await update.message.reply_text("📂 Archivos guardados:", reply_markup=InlineKeyboardMarkup(botones))
 
@@ -124,8 +124,10 @@ async def archivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manejar_archivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    accion, tipo, indice = query.data.split("_")
-    indice = int(indice)
+    partes = query.data.split("_")
+    accion = partes[0]   # "descargar" o "eliminar"
+    indice = int(partes[-1]) - 1  # ajustamos porque en listado empieza en 1
+
     if accion == "descargar":
         await query.message.reply_document(document=data["archivos"][indice]["file_id"])
     elif accion == "eliminar":
@@ -155,8 +157,8 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         botones = []
         for i, f in enumerate(resultados_archivos, start=1):
             botones.append([
-                InlineKeyboardButton(f"📂 Archivo {i} {f['caption']}", callback_data=f"descargar_{data['archivos'].index(f)}"),
-                InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_archivo_{data['archivos'].index(f)}")
+                InlineKeyboardButton(f"📂 Archivo {i} {f['caption']}", callback_data=f"descargar_{data['archivos'].index(f)+1}"),
+                InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{data['archivos'].index(f)+1}")
             ])
         await update.message.reply_text("📂 Archivos encontrados:", reply_markup=InlineKeyboardMarkup(botones))
 
@@ -172,7 +174,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.PHOTO, guardar_archivo))
     app.add_handler(CallbackQueryHandler(manejar_fecha, pattern="^fecha_"))
     app.add_handler(CallbackQueryHandler(manejar_botones, pattern="^(completar|eliminar)_"))
-    app.add_handler(CallbackQueryHandler(manejar_archivos, pattern="^(descargar|eliminar_archivo)_"))
+    app.add_handler(CallbackQueryHandler(manejar_archivos, pattern="^(descargar|eliminar)_"))
 
     app.run_polling()
 
