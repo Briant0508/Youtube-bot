@@ -1,22 +1,12 @@
 import os
 import datetime
-import json
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
-DATA_FILE = "data.json"
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))  # ID del canal privado
 
-# --- Cargar datos ---
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "r") as f:
-        data = json.load(f)
-else:
-    data = {"tareas": [], "notas": [], "archivos": []}
-
-def guardar_datos():
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+data = {"tareas": [], "notas": [], "archivos": []}
 
 # --- Bienvenida ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -29,7 +19,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /nota <texto> → guardar una nota\n"
         "• /buscar <palabra> → buscar en notas y archivos\n"
         "• /archivos → ver todos los archivos guardados\n\n"
-        "Puedes enviar documentos, fotos o videos (hasta 2 GB) y los guardaré."
+        "Los datos se guardan en el canal privado."
     )
     await update.message.reply_text(texto)
 
@@ -39,8 +29,6 @@ async def nueva_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✍️ Escribe el nombre de la tarea después de /tarea")
         return
     texto = " ".join(context.args)
-    context.user_data["tarea_texto"] = texto
-
     hoy = datetime.date.today()
     botones = []
     for i in range(10):
@@ -51,43 +39,13 @@ async def nueva_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def manejar_fecha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # evita el mensaje "El bot no responde"
+    await query.answer()
     _, fecha_str, texto = query.data.split("_", 2)
-    fecha = datetime.datetime.strptime(fecha_str, "%Y-%m-%d")
     tarea = {"texto": texto, "fecha": fecha_str, "completada": False}
     data["tareas"].append(tarea)
-    guardar_datos()
+    # Guardar en canal
+    await query.message.bot.send_message(CHANNEL_ID, f"TAREA|{texto}|{fecha_str}|False")
     await query.edit_message_text(f"✅ Tarea añadida: *{texto}* (vence {fecha_str})")
-
-# --- Listado de tareas ---
-async def listado(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not data["tareas"]:
-        await update.message.reply_text("📭 No tienes tareas pendientes.")
-        return
-    for i, t in enumerate(data["tareas"], start=1):
-        botones = [
-            [InlineKeyboardButton("✅ Completar", callback_data=f"completar_{i-1}")],
-            [InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{i-1}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(botones)
-        await update.message.reply_text(
-            f"{i}. {t['texto']} - vence {t['fecha']} [{'✔️' if t['completada'] else '❌'}]",
-            reply_markup=reply_markup
-        )
-
-async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    accion, indice = query.data.split("_")
-    indice = int(indice)
-    if accion == "completar":
-        data["tareas"][indice]["completada"] = True
-        guardar_datos()
-        await query.edit_message_text(f"🎉 Tarea completada: *{data['tareas'][indice]['texto']}*")
-    elif accion == "eliminar":
-        tarea = data["tareas"].pop(indice)
-        guardar_datos()
-        await query.edit_message_text(f"🗑️ Tarea eliminada: *{tarea['texto']}*")
 
 # --- Notas ---
 async def nota(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -96,7 +54,8 @@ async def nota(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     texto = " ".join(context.args)
     data["notas"].append(texto)
-    guardar_datos()
+    # Guardar en canal
+    await update.message.bot.send_message(CHANNEL_ID, f"NOTA|{texto}")
     await update.message.reply_text(f"✅ Nota guardada: {texto}")
 
 # --- Guardar archivos ---
@@ -104,77 +63,36 @@ async def guardar_archivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     archivo = update.message.document or update.message.video or update.message.photo[-1]
     entrada = {"file_id": archivo.file_id, "caption": update.message.caption or ""}
     data["archivos"].append(entrada)
-    guardar_datos()
+    # Guardar en canal
+    await update.message.bot.send_message(CHANNEL_ID, f"ARCHIVO|{entrada['file_id']}|{entrada['caption']}")
     await update.message.reply_text("📂 Archivo guardado correctamente.")
 
-# --- Listar archivos ---
-async def archivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not data["archivos"]:
-        await update.message.reply_text("📭 No tienes archivos guardados.")
-        return
-    botones = []
-    for i, f in enumerate(data["archivos"], start=1):
-        botones.append([
-            InlineKeyboardButton(f"📂 Archivo {i} {f['caption']}", callback_data=f"descargar_{i}"),
-            InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{i}")
-        ])
-    await update.message.reply_text("📂 Archivos guardados:", reply_markup=InlineKeyboardMarkup(botones))
-
-# --- Descargar o eliminar archivo ---
-async def manejar_archivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    partes = query.data.split("_")
-    accion = partes[0]   # "descargar" o "eliminar"
-    indice = int(partes[-1]) - 1  # ajustamos porque en listado empieza en 1
-
-    if accion == "descargar":
-        await query.message.reply_document(document=data["archivos"][indice]["file_id"])
-    elif accion == "eliminar":
-        archivo = data["archivos"].pop(indice)
-        guardar_datos()
-        await query.edit_message_text(f"🗑️ Archivo eliminado: {archivo['caption']}")
-
-# --- Buscar ---
-async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("🔍 Uso: /buscar <palabra>")
-        return
-    palabra = " ".join(context.args).lower()
-
-    resultados_notas = [n for n in data["notas"] if palabra in n.lower()]
-    resultados_archivos = [f for f in data["archivos"] if palabra in f["caption"].lower()]
-
-    if not resultados_notas and not resultados_archivos:
-        await update.message.reply_text("❌ No encontré coincidencias.")
-        return
-
-    if resultados_notas:
-        texto = "📋 Notas encontradas:\n" + "\n".join([f"- {n}" for n in resultados_notas])
-        await update.message.reply_text(texto)
-
-    if resultados_archivos:
-        botones = []
-        for i, f in enumerate(resultados_archivos, start=1):
-            botones.append([
-                InlineKeyboardButton(f"📂 Archivo {i} {f['caption']}", callback_data=f"descargar_{data['archivos'].index(f)+1}"),
-                InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{data['archivos'].index(f)+1}")
-            ])
-        await update.message.reply_text("📂 Archivos encontrados:", reply_markup=InlineKeyboardMarkup(botones))
+# --- Reconstrucción al iniciar ---
+async def reconstruir_memoria(app: Application):
+    # Leer últimos mensajes del canal
+    mensajes = await app.bot.get_chat_history(CHANNEL_ID, limit=100)
+    for msg in mensajes:
+        if msg.text and msg.text.startswith("TAREA|"):
+            _, texto, fecha, estado = msg.text.split("|")
+            data["tareas"].append({"texto": texto, "fecha": fecha, "completada": estado == "True"})
+        elif msg.text and msg.text.startswith("NOTA|"):
+            _, texto = msg.text.split("|", 1)
+            data["notas"].append(texto)
+        elif msg.text and msg.text.startswith("ARCHIVO|"):
+            _, file_id, caption = msg.text.split("|", 2)
+            data["archivos"].append({"file_id": file_id, "caption": caption})
 
 def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tarea", nueva_tarea))
-    app.add_handler(CommandHandler("listado", listado))
     app.add_handler(CommandHandler("nota", nota))
-    app.add_handler(CommandHandler("buscar", buscar))
-    app.add_handler(CommandHandler("archivos", archivos))
     app.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.PHOTO, guardar_archivo))
     app.add_handler(CallbackQueryHandler(manejar_fecha, pattern="^fecha_"))
-    app.add_handler(CallbackQueryHandler(manejar_botones, pattern="^(completar|eliminar)_"))
-    app.add_handler(CallbackQueryHandler(manejar_archivos, pattern="^(descargar|eliminar)_"))
+
+    # Reconstruir memoria al iniciar
+    app.post_init = lambda _: reconstruir_memoria(app)
 
     app.run_polling()
 
