@@ -1,15 +1,16 @@
 import os
 import datetime
 from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # Puede ser -100... o @username
 
 data = {"tareas": [], "notas": [], "archivos": []}
 
-# Usamos sesión en memoria para evitar SQLite en HostingGuru
+# Sesión en memoria para evitar SQLite en HostingGuru
 app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
 # --- Bienvenida ---
@@ -24,7 +25,7 @@ async def start(client, message):
         "• /nota <texto> → guardar una nota\n"
         "• /buscar <palabra> → buscar en notas y archivos\n"
         "• /archivos → ver todos los archivos guardados\n\n"
-        "Los datos se guardan en el canal privado."
+        "Los datos se guardan en el canal configurado."
     )
     await message.reply_text(texto)
 
@@ -65,19 +66,35 @@ async def nota(client, message):
 @app.on_message(filters.document | filters.video | filters.photo)
 async def guardar_archivo(client, message):
     archivo = message.document or message.video or message.photo
-    entrada = {"file_id": archivo.file_id, "caption": message.caption or ""}
+    entrada = {"file_id": archivo.file_id, "caption": message.caption or f"Archivo {len(data['archivos'])+1}"}
     data["archivos"].append(entrada)
     await client.send_message(CHANNEL_ID, f"ARCHIVO|{entrada['file_id']}|{entrada['caption']}")
     await message.reply_text("📂 Archivo guardado correctamente.")
 
-# --- Listar archivos ---
+# --- Listar archivos con botones ---
 @app.on_message(filters.command("archivos"))
 async def archivos(client, message):
     if not data["archivos"]:
         await message.reply_text("📭 No tienes archivos guardados.")
         return
-    texto = "\n".join([f"{i+1}. {f['caption']}" for i, f in enumerate(data["archivos"])])
-    await message.reply_text("📂 Archivos guardados:\n" + texto)
+    botones = []
+    for i, f in enumerate(data["archivos"], start=0):
+        botones.append([
+            InlineKeyboardButton(f"📂 {f['caption']}", callback_data=f"descargar_{i}"),
+            InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{i}")
+        ])
+    await message.reply_text("📂 Archivos guardados:", reply_markup=InlineKeyboardMarkup(botones))
+
+# --- Manejar botones de archivos ---
+@app.on_callback_query(filters.regex("^(descargar|eliminar)_"))
+async def manejar_archivos(client, callback_query):
+    accion, indice = callback_query.data.split("_")
+    indice = int(indice)
+    if accion == "descargar":
+        await callback_query.message.reply_document(document=data["archivos"][indice]["file_id"])
+    elif accion == "eliminar":
+        archivo = data["archivos"].pop(indice)
+        await callback_query.message.edit_text(f"🗑️ Archivo eliminado: {archivo['caption']}")
 
 # --- Buscar ---
 @app.on_message(filters.command("buscar"))
@@ -115,5 +132,10 @@ async def reconstruir(client, message):
             _, file_id, caption = msg.text.split("|", 2)
             data["archivos"].append({"file_id": file_id, "caption": caption})
     await message.reply_text("✅ Memoria reconstruida desde el canal.")
+
+# --- Comando de prueba ---
+@app.on_message(filters.command("test"))
+async def test(client, message):
+    await client.send_message(CHANNEL_ID, "✅ El bot puede escribir en el canal configurado.")
 
 app.run()
