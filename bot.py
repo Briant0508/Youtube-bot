@@ -3,8 +3,20 @@ import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-TOKEN = os.getenv("TOKEN")  # Usa variable de entorno en HostingGuru
+TOKEN = os.getenv("TOKEN")
 tareas = []
+
+# --- Mensaje de bienvenida ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = (
+        "👋 ¡Bienvenido al Bot de Recordatorios!\n\n"
+        "Este bot te ayuda a organizar tus tareas con fechas límite.\n\n"
+        "📌 Comandos principales:\n"
+        "• /tarea <nombre> → Añadir una tarea y elegir fecha límite.\n"
+        "• /listado → Ver todas tus tareas pendientes.\n\n"
+        "Cuando añadas una tarea, podrás marcarla como ✅ completada o 🗑️ eliminarla con botones."
+    )
+    await update.message.reply_text(texto)
 
 # --- Añadir tarea con selector de fecha ---
 async def nueva_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -14,7 +26,6 @@ async def nueva_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = " ".join(context.args)
     context.user_data["tarea_texto"] = texto
 
-    # Mostrar próximos 10 días como botones
     hoy = datetime.date.today()
     botones = []
     for i in range(10):
@@ -29,7 +40,6 @@ async def manejar_fecha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fecha = datetime.datetime.strptime(fecha_str, "%Y-%m-%d")
     tarea = {"texto": texto, "fecha": fecha, "completada": False}
     tareas.append(tarea)
-
     await query.edit_message_text(f"✅ Tarea añadida: *{texto}* (vence {fecha_str})")
 
 # --- Listado con botones ---
@@ -62,6 +72,7 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TOKEN).build()
 
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tarea", nueva_tarea))
     app.add_handler(CommandHandler("listado", listado))
     app.add_handler(CallbackQueryHandler(manejar_fecha, pattern="^fecha_"))
