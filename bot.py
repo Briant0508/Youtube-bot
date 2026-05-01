@@ -14,7 +14,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 Comandos principales:\n"
         "• /tarea <nombre> → Añadir una tarea y elegir fecha límite.\n"
         "• /listado → Ver todas tus tareas pendientes.\n\n"
-        "Cuando añadas una tarea, podrás marcarla como ✅ completada o 🗑️ eliminarla con botones."
+        "Cuando añadas una tarea, recibirás avisos:\n"
+        "⏳ 3 días antes de la fecha límite\n"
+        "⚠️ El mismo día de vencimiento\n"
+        "🔔 Recordatorios diarios si no la completas."
     )
     await update.message.reply_text(texto)
 
@@ -40,7 +43,42 @@ async def manejar_fecha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fecha = datetime.datetime.strptime(fecha_str, "%Y-%m-%d")
     tarea = {"texto": texto, "fecha": fecha, "completada": False}
     tareas.append(tarea)
+
+    # Aviso 3 días antes
+    recordatorio = fecha - datetime.timedelta(days=3)
+    context.job_queue.run_once(aviso_tarea, recordatorio, data=(query.message.chat_id, tarea))
+
+    # Aviso en la fecha límite
+    context.job_queue.run_once(aviso_limite, fecha, data=(query.message.chat_id, tarea))
+
     await query.edit_message_text(f"✅ Tarea añadida: *{texto}* (vence {fecha_str})")
+
+# --- Recordatorios ---
+async def aviso_tarea(context: ContextTypes.DEFAULT_TYPE):
+    chat_id, tarea = context.job.data
+    if not tarea["completada"]:
+        await context.bot.send_message(chat_id=chat_id,
+            text=f"⏳ Te quedan 3 días para completar: *{tarea['texto']}*")
+
+async def aviso_limite(context: ContextTypes.DEFAULT_TYPE):
+    chat_id, tarea = context.job.data
+    if not tarea["completada"]:
+        await context.bot.send_message(chat_id=chat_id,
+            text=f"⚠️ Hoy vence la tarea: *{tarea['texto']}*")
+        # Recordatorio diario si no se completa
+        context.job_queue.run_daily(aviso_diario, time=datetime.time(hour=9),
+                                    data=(chat_id, tarea))
+
+async def aviso_diario(context: ContextTypes.DEFAULT_TYPE):
+    chat_id, tarea = context.job.data
+    if not tarea["completada"]:
+        hoy = datetime.datetime.now().date()
+        if hoy > tarea["fecha"].date():
+            await context.bot.send_message(chat_id=chat_id,
+                text=f"❌ Tarea *{tarea['texto']}* no cumplida. Plazo caducado.")
+        else:
+            await context.bot.send_message(chat_id=chat_id,
+                text=f"🔔 Recordatorio: aún no completaste *{tarea['texto']}*")
 
 # --- Listado con botones ---
 async def listado(update: Update, context: ContextTypes.DEFAULT_TYPE):
