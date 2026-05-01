@@ -1,22 +1,17 @@
 import os
 import datetime
-import json
+import firebase_admin
+from firebase_admin import credentials, firestore
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = os.getenv("TOKEN")
-DATA_FILE = "data.json"
 
-# --- Cargar datos ---
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "r") as f:
-        data = json.load(f)
-else:
-    data = {"tareas": [], "notas": [], "archivos": []}
-
-def guardar_datos():
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+# --- Inicializar Firebase ---
+# Sube tu archivo de credenciales JSON a HostingGuru y pon su ruta aquí
+cred = credentials.Certificate("firebase-cred.json")
+firebase_admin.initialize_app(cred)
+db = firestore.client()
 
 # --- Bienvenida ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -29,7 +24,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /nota <texto> → guardar una nota\n"
         "• /buscar <palabra> → buscar en notas y archivos\n"
         "• /archivos → ver todos los archivos guardados\n\n"
-        "Puedes enviar documentos, fotos o videos (hasta 2 GB) y los guardaré."
+        "Puedes enviar documentos, fotos o videos (hasta 2 GB) y los guardaré en Firebase."
     )
     await update.message.reply_text(texto)
 
@@ -39,7 +34,6 @@ async def nueva_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✍️ Escribe el nombre de la tarea después de /tarea")
         return
     texto = " ".join(context.args)
-    context.user_data["tarea_texto"] = texto
 
     hoy = datetime.date.today()
     botones = []
@@ -51,23 +45,23 @@ async def nueva_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def manejar_fecha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # evita el mensaje "El bot no responde"
+    await query.answer()
     _, fecha_str, texto = query.data.split("_", 2)
-    fecha = datetime.datetime.strptime(fecha_str, "%Y-%m-%d")
     tarea = {"texto": texto, "fecha": fecha_str, "completada": False}
-    data["tareas"].append(tarea)
-    guardar_datos()
+    db.collection("tareas").add(tarea)
     await query.edit_message_text(f"✅ Tarea añadida: *{texto}* (vence {fecha_str})")
 
 # --- Listado de tareas ---
 async def listado(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not data["tareas"]:
+    docs = db.collection("tareas").stream()
+    tareas = [doc.to_dict() for doc in docs]
+    if not tareas:
         await update.message.reply_text("📭 No tienes tareas pendientes.")
         return
-    for i, t in enumerate(data["tareas"], start=1):
+    for i, t in enumerate(tareas, start=1):
         botones = [
-            [InlineKeyboardButton("✅ Completar", callback_data=f"completar_{i-1}")],
-            [InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{i-1}")]
+            [InlineKeyboardButton("✅ Completar", callback_data=f"completar_{doc.id}")],
+            [InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{doc.id}")]
         ]
         reply_markup = InlineKeyboardMarkup(botones)
         await update.message.reply_text(
@@ -78,15 +72,14 @@ async def listado(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    accion, indice = query.data.split("_")
-    indice = int(indice)
+    accion, doc_id = query.data.split("_")
+    ref = db.collection("tareas").document(doc_id)
+    tarea = ref.get().to_dict()
     if accion == "completar":
-        data["tareas"][indice]["completada"] = True
-        guardar_datos()
-        await query.edit_message_text(f"🎉 Tarea completada: *{data['tareas'][indice]['texto']}*")
+        ref.update({"completada": True})
+        await query.edit_message_text(f"🎉 Tarea completada: *{tarea['texto']}*")
     elif accion == "eliminar":
-        tarea = data["tareas"].pop(indice)
-        guardar_datos()
+        ref.delete()
         await query.edit_message_text(f"🗑️ Tarea eliminada: *{tarea['texto']}*")
 
 # --- Notas ---
@@ -95,28 +88,29 @@ async def nota(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✍️ Escribe el texto después de /nota")
         return
     texto = " ".join(context.args)
-    data["notas"].append(texto)
-    guardar_datos()
+    db.collection("notas").add({"texto": texto})
     await update.message.reply_text(f"✅ Nota guardada: {texto}")
 
 # --- Guardar archivos ---
 async def guardar_archivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     archivo = update.message.document or update.message.video or update.message.photo[-1]
     entrada = {"file_id": archivo.file_id, "caption": update.message.caption or ""}
-    data["archivos"].append(entrada)
-    guardar_datos()
+    db.collection("archivos").add(entrada)
     await update.message.reply_text("📂 Archivo guardado correctamente.")
 
 # --- Listar archivos ---
 async def archivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not data["archivos"]:
+    docs = db.collection("archivos").stream()
+    archivos = [doc for doc in docs]
+    if not archivos:
         await update.message.reply_text("📭 No tienes archivos guardados.")
         return
     botones = []
-    for i, f in enumerate(data["archivos"], start=1):
+    for i, doc in enumerate(archivos, start=1):
+        f = doc.to_dict()
         botones.append([
-            InlineKeyboardButton(f"📂 Archivo {i} {f['caption']}", callback_data=f"descargar_{i}"),
-            InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{i}")
+            InlineKeyboardButton(f"📂 Archivo {i} {f['caption']}", callback_data=f"descargar_{doc.id}"),
+            InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{doc.id}")
         ])
     await update.message.reply_text("📂 Archivos guardados:", reply_markup=InlineKeyboardMarkup(botones))
 
@@ -124,15 +118,13 @@ async def archivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manejar_archivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    partes = query.data.split("_")
-    accion = partes[0]   # "descargar" o "eliminar"
-    indice = int(partes[-1]) - 1  # ajustamos porque en listado empieza en 1
-
+    accion, doc_id = query.data.split("_")
+    ref = db.collection("archivos").document(doc_id)
+    archivo = ref.get().to_dict()
     if accion == "descargar":
-        await query.message.reply_document(document=data["archivos"][indice]["file_id"])
+        await query.message.reply_document(document=archivo["file_id"])
     elif accion == "eliminar":
-        archivo = data["archivos"].pop(indice)
-        guardar_datos()
+        ref.delete()
         await query.edit_message_text(f"🗑️ Archivo eliminado: {archivo['caption']}")
 
 # --- Buscar ---
@@ -142,23 +134,24 @@ async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     palabra = " ".join(context.args).lower()
 
-    resultados_notas = [n for n in data["notas"] if palabra in n.lower()]
-    resultados_archivos = [f for f in data["archivos"] if palabra in f["caption"].lower()]
+    notas = [doc.to_dict()["texto"] for doc in db.collection("notas").stream() if palabra in doc.to_dict()["texto"].lower()]
+    archivos = [doc for doc in db.collection("archivos").stream() if palabra in doc.to_dict()["caption"].lower()]
 
-    if not resultados_notas and not resultados_archivos:
+    if not notas and not archivos:
         await update.message.reply_text("❌ No encontré coincidencias.")
         return
 
-    if resultados_notas:
-        texto = "📋 Notas encontradas:\n" + "\n".join([f"- {n}" for n in resultados_notas])
+    if notas:
+        texto = "📋 Notas encontradas:\n" + "\n".join([f"- {n}" for n in notas])
         await update.message.reply_text(texto)
 
-    if resultados_archivos:
+    if archivos:
         botones = []
-        for i, f in enumerate(resultados_archivos, start=1):
+        for i, doc in enumerate(archivos, start=1):
+            f = doc.to_dict()
             botones.append([
-                InlineKeyboardButton(f"📂 Archivo {i} {f['caption']}", callback_data=f"descargar_{data['archivos'].index(f)+1}"),
-                InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{data['archivos'].index(f)+1}")
+                InlineKeyboardButton(f"📂 Archivo {i} {f['caption']}", callback_data=f"descargar_{doc.id}"),
+                InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{doc.id}")
             ])
         await update.message.reply_text("📂 Archivos encontrados:", reply_markup=InlineKeyboardMarkup(botones))
 
