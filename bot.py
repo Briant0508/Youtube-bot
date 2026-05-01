@@ -1,0 +1,73 @@
+import os
+import datetime
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+
+TOKEN = os.getenv("TOKEN")  # Usa variable de entorno en HostingGuru
+tareas = []
+
+# --- Añadir tarea con selector de fecha ---
+async def nueva_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("✍️ Escribe el nombre de la tarea después de /tarea")
+        return
+    texto = " ".join(context.args)
+    context.user_data["tarea_texto"] = texto
+
+    # Mostrar próximos 10 días como botones
+    hoy = datetime.date.today()
+    botones = []
+    for i in range(10):
+        dia = hoy + datetime.timedelta(days=i)
+        botones.append([InlineKeyboardButton(dia.strftime("%d-%m-%Y"), callback_data=f"fecha_{dia}_{texto}")])
+    reply_markup = InlineKeyboardMarkup(botones)
+    await update.message.reply_text("📅 Selecciona la fecha límite:", reply_markup=reply_markup)
+
+async def manejar_fecha(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    _, fecha_str, texto = query.data.split("_", 2)
+    fecha = datetime.datetime.strptime(fecha_str, "%Y-%m-%d")
+    tarea = {"texto": texto, "fecha": fecha, "completada": False}
+    tareas.append(tarea)
+
+    await query.edit_message_text(f"✅ Tarea añadida: *{texto}* (vence {fecha_str})")
+
+# --- Listado con botones ---
+async def listado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not tareas:
+        await update.message.reply_text("📭 No tienes tareas pendientes.")
+        return
+    for i, t in enumerate(tareas, start=1):
+        botones = [
+            [InlineKeyboardButton("✅ Completar", callback_data=f"completar_{i-1}")],
+            [InlineKeyboardButton("🗑️ Eliminar", callback_data=f"eliminar_{i-1}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(botones)
+        await update.message.reply_text(
+            f"{i}. {t['texto']} - vence {t['fecha'].strftime('%d-%m-%Y')} [{'✔️' if t['completada'] else '❌'}]",
+            reply_markup=reply_markup
+        )
+
+async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    accion, indice = query.data.split("_")
+    indice = int(indice)
+    if accion == "completar":
+        tareas[indice]["completada"] = True
+        await query.edit_message_text(f"🎉 Tarea completada: *{tareas[indice]['texto']}*")
+    elif accion == "eliminar":
+        tarea = tareas.pop(indice)
+        await query.edit_message_text(f"🗑️ Tarea eliminada: *{tarea['texto']}*")
+
+def main():
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("tarea", nueva_tarea))
+    app.add_handler(CommandHandler("listado", listado))
+    app.add_handler(CallbackQueryHandler(manejar_fecha, pattern="^fecha_"))
+    app.add_handler(CallbackQueryHandler(manejar_botones))
+
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
