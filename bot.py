@@ -6,7 +6,7 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")  # -100... o @username
 
-# Memoria interna ligera: solo nombres y file_id
+# Memoria interna ligera
 data = {"notas": [], "archivos": []}
 
 app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
@@ -15,7 +15,7 @@ app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 @app.on_message(filters.command("start"))
 async def start(client, message):
     texto = (
-        "👋 Bienvenido al Bot de Productividad.\n\n"
+        "👋 Bienvenido al Bot.\n\n"
         "📒 Notas:\n"
         "• /nota <texto>\n"
         "• /buscar <palabra>\n\n"
@@ -23,7 +23,10 @@ async def start(client, message):
         "• Envía un archivo → se guarda en el canal\n"
         "• /lista → muestra lo que el bot tiene guardado\n"
         "• Escribe el número → descarga\n"
-        "• Escribe 'del <número>' → elimina también del canal"
+        "• Escribe 'del <número>' → elimina también del canal\n\n"
+        "💾 Persistencia:\n"
+        "• /exportar → genera memoria_bot.txt\n"
+        "• /importar → envía memoria_bot.txt al bot para recuperar"
     )
     await message.reply_text(texto)
 
@@ -35,7 +38,7 @@ async def nota(client, message):
         return
     texto = " ".join(message.command[1:])
     data["notas"].append(texto)
-    enviado = await client.send_message(CHANNEL_ID, f"NOTA|{texto}")
+    await client.send_message(CHANNEL_ID, f"NOTA|{texto}")
     await message.reply_text(f"✅ Nota guardada: {texto}")
 
 # --- Guardar archivos ---
@@ -53,7 +56,7 @@ async def guardar_archivo(client, message):
         enviado = await client.send_photo(CHANNEL_ID, message.photo.file_id, caption=caption)
         nombre = "Imagen"
 
-    data["archivos"].append({"msg_id": enviado.id, "caption": nombre})
+    data["archivos"].append({"msg_id": enviado.id, "caption": nombre, "file_id": enviado.document.file_id if enviado.document else enviado.video.file_id if enviado.video else enviado.photo.file_id})
     await message.reply_text(f"📂 Archivo guardado: {nombre}")
 
 # --- Lista interna ---
@@ -122,5 +125,44 @@ async def buscar(client, message):
     if archivos:
         texto = "📂 Archivos encontrados:\n" + "\n".join([f"- {f['caption']}" for f in archivos])
         await message.reply_text(texto)
+
+# --- Exportar memoria ---
+@app.on_message(filters.command("exportar"))
+async def exportar(client, message):
+    contenido = []
+    for n in data["notas"]:
+        contenido.append(f"NOTA|{n}")
+    for f in data["archivos"]:
+        contenido.append(f"ARCHIVO|{f['caption']}|{f['file_id']}")
+    txt = "\n".join(contenido) if contenido else "VACIO"
+
+    # Guardar en archivo temporal
+    nombre = "memoria_bot.txt"
+    with open(nombre, "w", encoding="utf-8") as f:
+        f.write(txt)
+
+    await client.send_document(message.chat.id, nombre, caption="💾 Exportación completa: memoria_bot.txt")
+
+# --- Importar memoria ---
+@app.on_message(filters.document)
+async def importar(client, message):
+    if message.document.file_name == "memoria_bot.txt":
+        path = await message.download()
+        with open(path, "r", encoding="utf-8") as f:
+            lineas = f.readlines()
+
+        data["notas"].clear()
+        data["archivos"].clear()
+
+        for linea in lineas:
+            linea = linea.strip()
+            if linea.startswith("NOTA|"):
+                _, texto = linea.split("|", 1)
+                data["notas"].append(texto)
+            elif linea.startswith("ARCHIVO|"):
+                _, nombre, file_id = linea.split("|", 2)
+                data["archivos"].append({"msg_id": None, "caption": nombre, "file_id": file_id})
+
+        await message.reply_text("✅ Memoria restaurada desde memoria_bot.txt")
 
 app.run()
