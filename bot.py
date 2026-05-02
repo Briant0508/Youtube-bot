@@ -24,7 +24,7 @@ async def start(client, message):
         "• /buscar <palabra>\n\n"
         "📂 Archivos:\n"
         "• /archivos → lista numerada\n"
-        "• Luego escribe el número para descargar\n"
+        "• Luego escribe el número para descargar (se reenvía desde el canal)\n"
         "• O escribe 'del <número>' para eliminar\n\n"
         "🔄 /reconstruir → recuperar memoria desde el canal"
     )
@@ -62,14 +62,21 @@ async def nota(client, message):
     await client.send_message(CHANNEL_ID, f"NOTA|{texto}")
     await message.reply_text(f"✅ Nota guardada: {texto}")
 
-# --- Guardar archivos ---
+# --- Guardar archivos en el canal tal cual ---
 @app.on_message(filters.document | filters.video | filters.photo)
 async def guardar_archivo(client, message):
     archivo = message.document or message.video or message.photo
-    entrada = {"file_id": archivo.file_id, "caption": message.caption or f"Archivo {len(data['archivos'])+1}"}
-    data["archivos"].append(entrada)
-    await client.send_message(CHANNEL_ID, f"ARCHIVO|{entrada['file_id']}|{entrada['caption']}")
-    await message.reply_text("📂 Archivo guardado correctamente.")
+    caption = message.caption or f"Archivo {len(data['archivos'])+1}"
+
+    if message.document:
+        enviado = await client.send_document(CHANNEL_ID, archivo.file_id, caption=caption)
+    elif message.video:
+        enviado = await client.send_video(CHANNEL_ID, archivo.file_id, caption=caption)
+    elif message.photo:
+        enviado = await client.send_photo(CHANNEL_ID, archivo.file_id, caption=caption)
+
+    data["archivos"].append({"msg_id": enviado.id, "caption": caption})
+    await message.reply_text("📂 Archivo guardado en el canal.")
 
 # --- Listar archivos ---
 @app.on_message(filters.command("archivos"))
@@ -88,21 +95,12 @@ async def archivos(client, message):
 async def manejar_archivos(client, message):
     txt = message.text.strip()
 
-    # Descargar
+    # Descargar (reenviar desde el canal)
     if txt.isdigit():
         indice = int(txt) - 1
         if 0 <= indice < len(data["archivos"]):
             archivo = data["archivos"][indice]
-            try:
-                await message.reply_document(archivo["file_id"], caption=archivo["caption"])
-            except:
-                try:
-                    await message.reply_video(archivo["file_id"], caption=archivo["caption"])
-                except:
-                    try:
-                        await message.reply_photo(archivo["file_id"], caption=archivo["caption"])
-                    except:
-                        await message.reply_text("❌ No pude enviar el archivo, revisa el tipo.")
+            await client.forward_messages(message.chat.id, CHANNEL_ID, archivo["msg_id"])
         else:
             await message.reply_text("❌ Número inválido. Usa /archivos para ver la lista.")
 
@@ -139,7 +137,7 @@ async def buscar(client, message):
         texto = "📂 Archivos encontrados:\n" + "\n".join([f"- {f['caption']}" for f in archivos])
         await message.reply_text(texto)
 
-# --- Reconstrucción ---
+# --- Reconstrucción desde el canal ---
 @app.on_message(filters.command("reconstruir"))
 async def reconstruir(client, message):
     data["tareas"].clear()
@@ -153,11 +151,19 @@ async def reconstruir(client, message):
         elif msg.text and msg.text.startswith("NOTA|"):
             _, texto = msg.text.split("|", 1)
             data["notas"].append(texto)
-        elif msg.text and msg.text.startswith("ARCHIVO|"):
-            _, file_id, caption = msg.text.split("|", 2)
-            data["archivos"].append({"file_id": file_id, "caption": caption})
+        elif msg.document or msg.video or msg.photo:
+            archivo = msg.document or msg.video or msg.photo
+            caption = msg.caption or "Archivo"
+            data["archivos"].append({"msg_id": msg.id, "caption": caption})
 
-    await message.reply_text("✅ Memoria reconstruida desde el canal.")
+    if data["archivos"]:
+        texto = "📂 Archivos recuperados:\n"
+        for i, f in enumerate(data["archivos"], start=1):
+            texto += f"{i}. Archivo: {f['caption']}\n"
+        texto += "\n👉 Escribe el número para descargar.\n👉 O escribe 'del <número>' para eliminar."
+        await message.reply_text(texto)
+    else:
+        await message.reply_text("✅ Memoria reconstruida, pero no hay archivos guardados.")
 
 # --- Comando de prueba ---
 @app.on_message(filters.command("test"))
