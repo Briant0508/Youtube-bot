@@ -92,7 +92,20 @@ async def manejar_archivos(client, message):
         indice = int(txt) - 1
         if 0 <= indice < len(data["archivos"]):
             archivo = data["archivos"][indice]
-            await message.reply_document(document=archivo["file_id"], caption=archivo["caption"])
+            if "file_id" in archivo:
+    try:
+        # Intentar como documento
+        await message.reply_document(archivo["file_id"], caption=archivo["caption"])
+    except:
+        try:
+            # Intentar como video
+            await message.reply_video(archivo["file_id"], caption=archivo["caption"])
+        except:
+            try:
+                # Intentar como foto
+                await message.reply_photo(archivo["file_id"], caption=archivo["caption"])
+            except:
+                await message.reply_text("❌ No pude enviar el archivo, revisa el tipo.")
         else:
             await message.reply_text("❌ Número inválido. Usa /archivos para ver la lista.")
     # Eliminar
