@@ -1,5 +1,4 @@
 import os
-import datetime
 from pyrogram import Client, filters
 
 API_ID = int(os.getenv("API_ID"))
@@ -7,7 +6,7 @@ API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")  # Puede ser -100... o @username
 
-data = {"tareas": [], "notas": [], "archivos": []}
+data = {"notas": [], "archivos": []}
 
 app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
@@ -16,39 +15,16 @@ app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 async def start(client, message):
     texto = (
         "👋 Bienvenido al Bot de Productividad.\n\n"
-        "📅 Tareas:\n"
-        "• /tarea <texto>\n"
-        "• /listado\n\n"
         "📒 Notas:\n"
         "• /nota <texto>\n"
         "• /buscar <palabra>\n\n"
         "📂 Archivos:\n"
+        "• Envía un archivo → se guarda en el canal\n"
         "• /archivos → lista numerada\n"
-        "• Luego escribe el número para descargar (se reenvía desde el canal)\n"
-        "• O escribe 'del <número>' para eliminar\n\n"
+        "• Escribe el número → descarga (reenvío desde el canal)\n"
+        "• Escribe 'del <número>' → elimina también del canal\n\n"
         "🔄 /reconstruir → recuperar memoria desde el canal"
     )
-    await message.reply_text(texto)
-
-# --- Tareas ---
-@app.on_message(filters.command("tarea"))
-async def nueva_tarea(client, message):
-    if len(message.command) < 2:
-        await message.reply_text("✍️ Escribe el nombre de la tarea después de /tarea")
-        return
-    texto = " ".join(message.command[1:])
-    fecha = datetime.date.today().strftime("%d-%m-%Y")
-    tarea = {"texto": texto, "fecha": fecha, "completada": False}
-    data["tareas"].append(tarea)
-    await client.send_message(CHANNEL_ID, f"TAREA|{texto}|{fecha}|False")
-    await message.reply_text(f"✅ Tarea añadida: {texto} (vence {fecha})")
-
-@app.on_message(filters.command("listado"))
-async def listado(client, message):
-    if not data["tareas"]:
-        await message.reply_text("📭 No tienes tareas pendientes.")
-        return
-    texto = "\n".join([f"{i+1}. {t['texto']} - {t['fecha']} [{'✔️' if t['completada'] else '❌'}]" for i, t in enumerate(data["tareas"])])
     await message.reply_text(texto)
 
 # --- Notas ---
@@ -85,7 +61,7 @@ async def archivos(client, message):
         return
     texto = "📂 Archivos guardados:\n"
     for i, f in enumerate(data["archivos"], start=1):
-        texto += f"{i}. Archivo: {f['caption']}\n"
+        texto += f"{i}. {f['caption']}\n"
     texto += "\n👉 Escribe el número para descargar.\n👉 O escribe 'del <número>' para eliminar."
     await message.reply_text(texto)
 
@@ -94,7 +70,7 @@ async def archivos(client, message):
 async def manejar_archivos(client, message):
     txt = message.text.strip()
 
-    # Descargar (reenviar desde el canal)
+    # Descargar (reenvío desde el canal)
     if txt.isdigit():
         indice = int(txt) - 1
         if 0 <= indice < len(data["archivos"]):
@@ -103,12 +79,13 @@ async def manejar_archivos(client, message):
         else:
             await message.reply_text("❌ Número inválido. Usa /archivos para ver la lista.")
 
-    # Eliminar
+    # Eliminar (también del canal)
     elif txt.lower().startswith("del "):
         try:
             num = int(txt.split()[1]) - 1
             if 0 <= num < len(data["archivos"]):
                 archivo = data["archivos"].pop(num)
+                await client.delete_messages(CHANNEL_ID, archivo["msg_id"])
                 await message.reply_text(f"🗑️ Archivo eliminado: {archivo['caption']}")
             else:
                 await message.reply_text("❌ Número inválido. Usa /archivos para ver la lista.")
@@ -139,25 +116,26 @@ async def buscar(client, message):
 # --- Reconstrucción desde el canal ---
 @app.on_message(filters.command("reconstruir"))
 async def reconstruir(client, message):
-    data["tareas"].clear()
     data["notas"].clear()
     data["archivos"].clear()
 
     async for msg in client.get_chat_history(CHANNEL_ID, limit=500):
-        if msg.text and msg.text.startswith("TAREA|"):
-            _, texto, fecha, estado = msg.text.split("|")
-            data["tareas"].append({"texto": texto, "fecha": fecha, "completada": estado == "True"})
-        elif msg.text and msg.text.startswith("NOTA|"):
+        if msg.text and msg.text.startswith("NOTA|"):
             _, texto = msg.text.split("|", 1)
             data["notas"].append(texto)
-        elif msg.document or msg.video or msg.photo:
-            caption = msg.caption or "Archivo"
-            data["archivos"].append({"msg_id": msg.id, "caption": caption})
+        elif msg.document:
+            nombre = msg.document.file_name or "Documento"
+            data["archivos"].append({"msg_id": msg.id, "caption": nombre})
+        elif msg.video:
+            nombre = msg.video.file_name or "Video mp4"
+            data["archivos"].append({"msg_id": msg.id, "caption": nombre})
+        elif msg.photo:
+            data["archivos"].append({"msg_id": msg.id, "caption": "Imagen"})
 
     if data["archivos"]:
         texto = "📂 Archivos recuperados:\n"
         for i, f in enumerate(data["archivos"], start=1):
-            texto += f"{i}. Archivo: {f['caption']}\n"
+            texto += f"{i}. {f['caption']}\n"
         texto += "\n👉 Escribe el número para descargar.\n👉 O escribe 'del <número>' para eliminar."
         await message.reply_text(texto)
     else:
