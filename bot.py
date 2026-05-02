@@ -25,8 +25,8 @@ async def start(client, message):
         "• Escribe el número → descarga\n"
         "• Escribe 'del <número>' → elimina también del canal\n\n"
         "💾 Persistencia:\n"
-        "• /exportar → genera memoria_bot.txt\n"
-        "• /importar → envía memoria_bot.txt al bot para recuperar"
+        "• /exportar → genera un código con toda la memoria\n"
+        "• /importar → responde al código para restaurar"
     )
     await message.reply_text(texto)
 
@@ -49,14 +49,17 @@ async def guardar_archivo(client, message):
     if message.document:
         enviado = await client.send_document(CHANNEL_ID, message.document.file_id, caption=caption)
         nombre = message.document.file_name or caption
+        file_id = message.document.file_id
     elif message.video:
         enviado = await client.send_video(CHANNEL_ID, message.video.file_id, caption=caption)
         nombre = message.video.file_name or caption
+        file_id = message.video.file_id
     elif message.photo:
         enviado = await client.send_photo(CHANNEL_ID, message.photo.file_id, caption=caption)
         nombre = "Imagen"
+        file_id = message.photo.file_id
 
-    data["archivos"].append({"msg_id": enviado.id, "caption": nombre, "file_id": enviado.document.file_id if enviado.document else enviado.video.file_id if enviado.video else enviado.photo.file_id})
+    data["archivos"].append({"msg_id": enviado.id, "caption": nombre, "file_id": file_id})
     await message.reply_text(f"📂 Archivo guardado: {nombre}")
 
 # --- Lista interna ---
@@ -126,43 +129,38 @@ async def buscar(client, message):
         texto = "📂 Archivos encontrados:\n" + "\n".join([f"- {f['caption']}" for f in archivos])
         await message.reply_text(texto)
 
-# --- Exportar memoria ---
+# --- Exportar memoria como código ---
 @app.on_message(filters.command("exportar"))
 async def exportar(client, message):
-    contenido = []
+    contenido = ["MEMORIA_START"]
     for n in data["notas"]:
         contenido.append(f"NOTA|{n}")
     for f in data["archivos"]:
         contenido.append(f"ARCHIVO|{f['caption']}|{f['file_id']}")
-    txt = "\n".join(contenido) if contenido else "VACIO"
+    contenido.append("MEMORIA_END")
 
-    # Guardar en archivo temporal
-    nombre = "memoria_bot.txt"
-    with open(nombre, "w", encoding="utf-8") as f:
-        f.write(txt)
+    codigo = "\n".join(contenido)
+    await message.reply_text(f"💾 Copia este código y guárdalo:\n\n{codigo}")
 
-    await client.send_document(message.chat.id, nombre, caption="💾 Exportación completa: memoria_bot.txt")
-
-# --- Importar memoria ---
-@app.on_message(filters.document)
+# --- Importar memoria desde código ---
+@app.on_message(filters.command("importar"))
 async def importar(client, message):
-    if message.document.file_name == "memoria_bot.txt":
-        path = await message.download()
-        with open(path, "r", encoding="utf-8") as f:
-            lineas = f.readlines()
+    if not message.reply_to_message or "MEMORIA_START" not in message.reply_to_message.text:
+        await message.reply_text("❌ Debes responder al mensaje que contiene el código de memoria.")
+        return
 
-        data["notas"].clear()
-        data["archivos"].clear()
+    lineas = message.reply_to_message.text.strip().splitlines()
+    data["notas"].clear()
+    data["archivos"].clear()
 
-        for linea in lineas:
-            linea = linea.strip()
-            if linea.startswith("NOTA|"):
-                _, texto = linea.split("|", 1)
-                data["notas"].append(texto)
-            elif linea.startswith("ARCHIVO|"):
-                _, nombre, file_id = linea.split("|", 2)
-                data["archivos"].append({"msg_id": None, "caption": nombre, "file_id": file_id})
+    for linea in lineas:
+        if linea.startswith("NOTA|"):
+            _, texto = linea.split("|", 1)
+            data["notas"].append(texto)
+        elif linea.startswith("ARCHIVO|"):
+            _, nombre, file_id = linea.split("|", 2)
+            data["archivos"].append({"msg_id": None, "caption": nombre, "file_id": file_id})
 
-        await message.reply_text("✅ Memoria restaurada desde memoria_bot.txt")
+    await message.reply_text("✅ Memoria restaurada desde el código.")
 
 app.run()
