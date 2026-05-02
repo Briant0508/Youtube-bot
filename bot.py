@@ -1,16 +1,19 @@
 import os
+import json
+import base64
+import zlib
 from pyrogram import Client, filters
 
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_INPUT = os.getenv("CHANNEL_ID")  # Puede ser -100xxx o @username
+CHANNEL_INPUT = os.getenv("CHANNEL_ID")
 
-# Convertir CHANNEL_ID correctamente
+# Convertir CHANNEL_ID correctamente (acepta @username o ID numérico)
 if CHANNEL_INPUT.startswith('@'):
-    CHANNEL_ID = CHANNEL_INPUT  # Es username, mantener como string
+    CHANNEL_ID = CHANNEL_INPUT
 else:
-    CHANNEL_ID = int(CHANNEL_INPUT)  # Es ID numérico
+    CHANNEL_ID = int(CHANNEL_INPUT)
 
 # Archivo de persistencia local
 DATA_FILE = "bot_data.json"
@@ -39,6 +42,8 @@ data = cargar_datos()
 
 app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
+# ==================== COMANDOS PRINCIPALES ====================
+
 @app.on_message(filters.command("start"))
 async def start(client, message):
     # Verificar si el bot puede acceder al canal
@@ -49,8 +54,8 @@ async def start(client, message):
         canal_ok = "❌"
     
     texto = (
-        "👋 **Bot para HostingGuru**\n\n"
-        f"📊 **Estado:**\n"
+        "👋 **Bot de Almacenamiento**\n\n"
+        f"📊 **Estado actual:**\n"
         f"📋 Notas: {len(data['notas'])}\n"
         f"📂 Archivos: {len(data['archivos'])}\n"
         f"📡 Canal: {canal_ok}\n\n"
@@ -58,10 +63,15 @@ async def start(client, message):
         "• `/nota <texto>` - Guardar nota\n"
         "• `/lista` - Ver contenido\n"
         "• `/buscar <palabra>` - Buscar\n"
-        "• `/exportar` - **Hacer backup**\n"
+        "• `/exportar` - Hacer backup (¡Importante!)\n"
         "• `/importar` - Restaurar backup\n"
-        "• `/status` - Ver estado\n\n"
-        "⚠️ **Importante:**\n"
+        "• `/status` - Ver estado detallado\n"
+        "• `/reparar` - Reparar referencias rotas\n"
+        "• `/limpiar` - Limpiar memoria local\n\n"
+        "🎮 **Comandos rápidos:**\n"
+        "• `número` - Descargar archivo (ej: `5`)\n"
+        "• `del número` - Eliminar archivo (ej: `del 3`)\n\n"
+        "⚠️ **Importante para HostingGuru:**\n"
         "• Usa `/exportar` regularmente\n"
         "• Los archivos están SEGUROS en el canal"
     )
@@ -70,7 +80,7 @@ async def start(client, message):
 @app.on_message(filters.command("nota"))
 async def nota(client, message):
     if len(message.command) < 2:
-        await message.reply_text("✍️ Uso: `/nota <texto>`\nEjemplo: `/nota Comprar leche`")
+        await message.reply_text("✍️ **Uso:** `/nota <texto>`\nEjemplo: `/nota Comprar leche`")
         return
     
     texto = " ".join(message.command[1:])
@@ -79,7 +89,7 @@ async def nota(client, message):
     
     try:
         await client.send_message(CHANNEL_ID, f"NOTA|{texto}")
-        await message.reply_text(f"✅ Nota guardada: `{texto}`")
+        await message.reply_text(f"✅ **Nota guardada:**\n`{texto}`")
     except Exception as e:
         await message.reply_text(f"✅ Nota guardada localmente\n⚠️ Error en canal: `{e}`")
 
@@ -110,7 +120,7 @@ async def guardar_archivo(client, message):
         await message.reply_text(f"📂 **Archivo guardado:** `{nombre}`")
     
     except Exception as e:
-        await message.reply_text(f"❌ Error: `{e}`\n\n¿El bot es admin del canal?")
+        await message.reply_text(f"❌ **Error al guardar:** `{e}`\n\n¿El bot es admin del canal?")
 
 @app.on_message(filters.command("lista"))
 async def lista(client, message):
@@ -137,49 +147,77 @@ async def lista(client, message):
             texto += f"\n*... y {len(data['notas'])-15} más*\n"
 
     if texto:
-        texto += "\n\n👉 Escribe el `número` para descargar\n👉 Escribe `del <número>` para eliminar"
+        texto += "\n\n👉 **Comandos rápidos:**\n"
+        texto += "• Escribe el `número` para descargar\n"
+        texto += "• Escribe `del <número>` para eliminar"
         await message.reply_text(texto)
 
-@app.on_message(filters.text & ~filters.command(["start", "nota", "lista", "buscar", "exportar", "importar", "limpiar", "status"]))
+# ==================== MANEJO DE ARCHIVOS (CORREGIDO) ====================
+
+@app.on_message(filters.text & ~filters.command(["start", "nota", "lista", "buscar", "exportar", "importar", "limpiar", "status", "reparar"]))
 async def manejar_archivos(client, message):
     txt = message.text.strip()
 
+    # Descargar archivo por número
     if txt.isdigit():
         indice = int(txt) - 1
         if 0 <= indice < len(data["archivos"]):
             archivo = data["archivos"][indice]
+            
             try:
-                await client.copy_message(
-                    message.chat.id,
-                    CHANNEL_ID,
-                    archivo["msg_id"]
-                )
+                # Método 1: Usar msg_id si existe
+                if archivo.get("msg_id") is not None:
+                    await client.copy_message(
+                        message.chat.id,
+                        CHANNEL_ID,
+                        archivo["msg_id"]
+                    )
+                else:
+                    # Método 2: Usar file_id directamente
+                    await client.send_document(
+                        message.chat.id,
+                        archivo["file_id"],
+                        caption=archivo["caption"]
+                    )
                 await message.reply_text(f"✅ **Descargado:** `{archivo['caption']}`")
+            
             except Exception as e:
-                await message.reply_text(f"❌ Error: `{e}`")
+                await message.reply_text(
+                    f"❌ **Error al descargar**\n\n"
+                    f"Archivo: `{archivo['caption']}`\n"
+                    f"Error: `{e}`\n\n"
+                    f"💡 Usa `/reparar` para intentar recuperar este archivo."
+                )
         else:
             await message.reply_text("❌ **Número inválido.** Usa `/lista`")
 
+    # Eliminar archivo por número
     elif txt.lower().startswith("del "):
         try:
             num = int(txt.split()[1]) - 1
             if 0 <= num < len(data["archivos"]):
                 archivo = data["archivos"].pop(num)
                 guardar_datos()
-                try:
-                    await client.delete_messages(CHANNEL_ID, archivo["msg_id"])
-                    await message.reply_text(f"🗑️ **Eliminado:** `{archivo['caption']}`")
-                except:
-                    await message.reply_text(f"🗑️ **Eliminado de la lista** (no del canal)")
+                
+                # Intentar eliminar del canal solo si tiene msg_id
+                if archivo.get("msg_id") is not None:
+                    try:
+                        await client.delete_messages(CHANNEL_ID, archivo["msg_id"])
+                    except:
+                        pass
+                
+                await message.reply_text(f"🗑️ **Eliminado:** `{archivo['caption']}`")
             else:
                 await message.reply_text("❌ **Número inválido.** Usa `/lista`")
         except:
-            await message.reply_text("❌ **Uso:** `del <número>`")
+            await message.reply_text("❌ **Uso correcto:** `del <número>`\nEjemplo: `del 1`")
+
+# ==================== BUSCAR ====================
 
 @app.on_message(filters.command("buscar"))
 async def buscar(client, message):
     if len(message.command) < 2:
-        await message.reply_text("🔍 **Uso:** `/buscar <palabra>`")
+        await message.reply_text("🔍 **Uso:** `/buscar <palabra>`\nEjemplo: `/buscar proyecto`")
         return
     
     palabra = " ".join(message.command[1:]).lower()
@@ -206,11 +244,11 @@ async def buscar(client, message):
     
     await message.reply_text(respuesta)
 
+# ==================== BACKUP (EXPORTAR/IMPORTAR) ====================
+
 @app.on_message(filters.command("exportar"))
 async def exportar(client, message):
-    import json, base64, zlib
-    
-    status_msg = await message.reply_text("⏳ **Generando backup...**")
+    status_msg = await message.reply_text("⏳ **Generando copia de seguridad...**")
     
     try:
         export_data = {
@@ -228,7 +266,7 @@ async def exportar(client, message):
         
         await status_msg.delete()
         await message.reply_text(
-            f"💾 **Backup**\n\n"
+            f"💾 **Copia de seguridad**\n\n"
             f"📋 Notas: {len(data['notas'])}\n"
             f"📂 Archivos: {len(data['archivos'])}\n\n"
             f"```\n{codigo}\n```\n\n"
@@ -236,17 +274,19 @@ async def exportar(client, message):
             f"Para restaurar: Responde a ESTE mensaje con `/importar`"
         )
     except Exception as e:
-        await status_msg.edit_text(f"❌ Error: `{str(e)[:200]}`")
+        await status_msg.edit_text(f"❌ **Error al exportar:** `{str(e)[:200]}`")
 
 @app.on_message(filters.command("importar"))
 async def importar(client, message):
-    import json, base64, zlib
-    
     if not message.reply_to_message:
-        await message.reply_text("❌ Responde al mensaje que contiene el código de backup.")
+        await message.reply_text(
+            "❌ **Error:** Debes responder al mensaje que contiene el código de backup.\n\n"
+            "1. Encuentra el mensaje con el código\n"
+            "2. Responde a ESE mensaje con `/importar`"
+        )
         return
     
-    status_msg = await message.reply_text("⏳ **Restaurando...**")
+    status_msg = await message.reply_text("⏳ **Restaurando copia de seguridad...**")
     
     try:
         codigo_texto = message.reply_to_message.text
@@ -258,29 +298,111 @@ async def importar(client, message):
         import_data = json.loads(json_str)
         
         data["notas"] = import_data.get("notas", [])
-        data["archivos"] = [
-            {"msg_id": None, "caption": a["caption"], "file_id": a["file_id"]}
-            for a in import_data.get("archivos", [])
-        ]
+        data["archivos"] = []
+        
+        # Restaurar archivos y buscar sus msg_id en el canal
+        for a in import_data.get("archivos", []):
+            archivo = {
+                "msg_id": None,
+                "caption": a["caption"],
+                "file_id": a["file_id"]
+            }
+            
+            # Buscar el mensaje en el canal para obtener msg_id
+            try:
+                async for msg in client.get_chat_history(CHANNEL_ID, limit=500):
+                    if msg.document and msg.document.file_id == a["file_id"]:
+                        archivo["msg_id"] = msg.id
+                        break
+                    elif msg.video and msg.video.file_id == a["file_id"]:
+                        archivo["msg_id"] = msg.id
+                        break
+                    elif msg.photo and msg.photo.file_id == a["file_id"]:
+                        archivo["msg_id"] = msg.id
+                        break
+            except:
+                pass  # Si no encuentra, queda None y usará file_id
+            
+            data["archivos"].append(archivo)
+        
         guardar_datos()
         
+        msg_ids_encontrados = sum(1 for a in data["archivos"] if a["msg_id"] is not None)
+        
         await status_msg.edit_text(
-            f"✅ **Restaurado**\n\n"
+            f"✅ **Copia restaurada exitosamente**\n\n"
             f"📋 Notas: {len(data['notas'])}\n"
-            f"📂 Archivos: {len(data['archivos'])}"
+            f"📂 Archivos: {len(data['archivos'])}\n"
+            f"📡 msg_id recuperados: {msg_ids_encontrados}/{len(data['archivos'])}\n\n"
+            f"💡 Los archivos sin msg_id usarán file_id automáticamente."
         )
     except Exception as e:
-        await status_msg.edit_text(f"❌ Error: `{str(e)[:200]}`")
+        await status_msg.edit_text(f"❌ **Error al importar:** `{str(e)[:200]}`")
+
+# ==================== REPARAR ARCHIVOS ====================
+
+@app.on_message(filters.command("reparar"))
+async def reparar(client, message):
+    status_msg = await message.reply_text("🔄 **Reparando referencias de archivos...**\n\nEsto puede tomar unos segundos...")
+    
+    reparados = 0
+    fallidos = 0
+    
+    for i, archivo in enumerate(data["archivos"]):
+        if archivo.get("msg_id") is None:
+            # Intentar obtener el mensaje por file_id
+            try:
+                async for msg in client.get_chat_history(CHANNEL_ID, limit=1000):
+                    if msg.document and msg.document.file_id == archivo["file_id"]:
+                        archivo["msg_id"] = msg.id
+                        reparados += 1
+                        break
+                    elif msg.video and msg.video.file_id == archivo["file_id"]:
+                        archivo["msg_id"] = msg.id
+                        reparados += 1
+                        break
+                    elif msg.photo and msg.photo.file_id == archivo["file_id"]:
+                        archivo["msg_id"] = msg.id
+                        reparados += 1
+                        break
+                else:
+                    fallidos += 1
+            except Exception as e:
+                fallidos += 1
+                print(f"Error reparando archivo {i}: {e}")
+    
+    guardar_datos()
+    
+    await status_msg.edit_text(
+        f"✅ **Reparación completada**\n\n"
+        f"🔧 Reparados: {reparados}\n"
+        f"❌ Fallidos: {fallidos}\n"
+        f"📂 Total archivos: {len(data['archivos'])}\n\n"
+        f"💡 Los archivos fallidos probablemente fueron eliminados del canal.\n"
+        f"   Puedes eliminarlos con `del <número>`"
+    )
+
+# ==================== ESTADO Y MANTENIMIENTO ====================
 
 @app.on_message(filters.command("status"))
 async def status(client, message):
-    await message.reply_text(
-        f"📊 **Estado**\n\n"
-        f"📋 Notas: `{len(data['notas'])}`\n"
-        f"📂 Archivos: `{len(data['archivos'])}`\n"
-        f"💾 Datos guardados: `{'Sí' if os.path.exists(DATA_FILE) else 'No'}`\n\n"
-        f"💡 Usa `/exportar` para hacer backup"
+    msg_id_validos = sum(1 for a in data["archivos"] if a.get("msg_id") is not None)
+    msg_id_invalidos = len(data["archivos"]) - msg_id_validos
+    
+    texto = (
+        f"📊 **Estado del Bot**\n\n"
+        f"📋 Notas en memoria: `{len(data['notas'])}`\n"
+        f"📂 Archivos en memoria: `{len(data['archivos'])}`\n"
+        f"   ├─ Con msg_id válido: `{msg_id_validos}`\n"
+        f"   └─ Sin msg_id (usarán file_id): `{msg_id_invalidos}`\n"
+        f"💾 Datos guardados en disco: `{'Sí' if os.path.exists(DATA_FILE) else 'No'}`\n\n"
+        f"📡 Canal: `{CHANNEL_ID}`\n\n"
+        f"💡 **Recomendaciones:**\n"
+        f"• Usa `/exportar` para hacer backup\n"
+        f"• Usa `/reparar` si hay archivos sin msg_id\n"
+        f"• Usa `/lista` para ver tu contenido"
     )
+    await message.reply_text(texto)
 
 @app.on_message(filters.command("limpiar"))
 async def limpiar_memoria(client, message):
@@ -288,14 +410,32 @@ async def limpiar_memoria(client, message):
         data["notas"].clear()
         data["archivos"].clear()
         guardar_datos()
-        await message.reply_text("🧹 **Memoria limpiada**")
+        await message.reply_text(
+            "🧹 **Memoria limpiada exitosamente**\n\n"
+            "✅ Datos locales eliminados\n"
+            "⚠️ Los archivos en el canal NO se eliminaron\n"
+            "💡 Para recuperar la lista, necesitarás un backup"
+        )
     else:
-        await message.reply_text("⚠️ Para confirmar: `/limpiar confirmar`")
+        await message.reply_text(
+            "⚠️ **Limpiar toda la memoria local**\n\n"
+            "Esto eliminará TODAS las notas y referencias de archivos.\n"
+            "Los archivos en el canal NO se tocan.\n\n"
+            "**Consecuencias:**\n"
+            "• Perderás el acceso a los archivos desde el bot\n"
+            "• Los archivos seguirán en el canal, pero no podrás listarlos\n\n"
+            "Para confirmar: `/limpiar confirmar`\n"
+            "Para hacer backup primero: `/exportar`"
+        )
+
+# ==================== INICIO ====================
 
 print("=" * 50)
-print("🚀 Bot iniciado")
-print(f"📁 Canal: {CHANNEL_ID}")
-print(f"📊 Datos: {len(data['notas'])} notas, {len(data['archivos'])} archivos")
+print("🚀 Bot de Almacenamiento iniciado")
+print(f"📡 Canal: {CHANNEL_ID}")
+print(f"📋 Notas cargadas: {len(data['notas'])}")
+print(f"📂 Archivos cargados: {len(data['archivos'])}")
+print(f"💾 Archivo de datos: {DATA_FILE}")
 print("=" * 50)
 
 app.run()
