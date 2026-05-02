@@ -486,7 +486,7 @@ async def status(client, message):
 async def limpiar_memoria(client, message):
     if len(message.command) > 1 and message.command[1].lower() == "confirmar":
         data["notas"].clear()
-         data["archivos"].clear()
+        data["archivos"].clear()
         guardar_datos()
         await message.reply_text(
             "🧹 **Memoria limpiada exitosamente**\n\n"
