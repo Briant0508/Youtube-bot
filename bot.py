@@ -65,15 +65,14 @@ async def nota(client, message):
 # --- Guardar archivos en el canal tal cual ---
 @app.on_message(filters.document | filters.video | filters.photo)
 async def guardar_archivo(client, message):
-    archivo = message.document or message.video or message.photo
     caption = message.caption or f"Archivo {len(data['archivos'])+1}"
 
     if message.document:
-        enviado = await client.send_document(CHANNEL_ID, archivo.file_id, caption=caption)
+        enviado = await client.send_document(CHANNEL_ID, message.document.file_id, caption=caption)
     elif message.video:
-        enviado = await client.send_video(CHANNEL_ID, archivo.file_id, caption=caption)
+        enviado = await client.send_video(CHANNEL_ID, message.video.file_id, caption=caption)
     elif message.photo:
-        enviado = await client.send_photo(CHANNEL_ID, archivo.file_id, caption=caption)
+        enviado = await client.send_photo(CHANNEL_ID, message.photo.file_id, caption=caption)
 
     data["archivos"].append({"msg_id": enviado.id, "caption": caption})
     await message.reply_text("📂 Archivo guardado en el canal.")
@@ -152,7 +151,6 @@ async def reconstruir(client, message):
             _, texto = msg.text.split("|", 1)
             data["notas"].append(texto)
         elif msg.document or msg.video or msg.photo:
-            archivo = msg.document or msg.video or msg.photo
             caption = msg.caption or "Archivo"
             data["archivos"].append({"msg_id": msg.id, "caption": caption})
 
