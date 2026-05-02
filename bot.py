@@ -9,7 +9,6 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")  # Puede ser -100... o @username
 
 data = {"tareas": [], "notas": [], "archivos": []}
 
-# Sesión en memoria para HostingGuru
 app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
 # --- Bienvenida ---
@@ -17,14 +16,17 @@ app = Client("bot_session", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 async def start(client, message):
     texto = (
         "👋 Bienvenido al Bot de Productividad.\n\n"
-        "📅 Gestión de tareas:\n"
-        "• /tarea <texto> → añadir tarea\n"
-        "• /listado → ver tareas\n\n"
-        "📒 Notas y archivos:\n"
-        "• /nota <texto> → guardar nota\n"
-        "• /buscar <palabra> → buscar\n"
-        "• /archivos → ver lista de archivos\n\n"
-        "Usa el número del archivo para descargarlo."
+        "📅 Tareas:\n"
+        "• /tarea <texto>\n"
+        "• /listado\n\n"
+        "📒 Notas:\n"
+        "• /nota <texto>\n"
+        "• /buscar <palabra>\n\n"
+        "📂 Archivos:\n"
+        "• /archivos → lista numerada\n"
+        "• Luego escribe el número para descargar\n"
+        "• O escribe 'del <número>' para eliminar\n\n"
+        "🔄 /reconstruir → recuperar memoria desde el canal"
     )
     await message.reply_text(texto)
 
@@ -78,22 +80,32 @@ async def archivos(client, message):
     texto = "📂 Archivos guardados:\n"
     for i, f in enumerate(data["archivos"], start=1):
         texto += f"{i}. Archivo: {f['caption']}\n"
-    texto += "\n👉 Escribe el número del archivo para descargarlo."
+    texto += "\n👉 Escribe el número para descargar.\n👉 O escribe 'del <número>' para eliminar."
     await message.reply_text(texto)
 
-# --- Descargar archivo por número ---
-@app.on_message(filters.text & ~filters.command)
-async def descargar_por_numero(client, message):
-    if message.text.isdigit():
-        indice = int(message.text) - 1
+# --- Descargar o eliminar por número ---
+@app.on_message(filters.text)
+async def manejar_archivos(client, message):
+    txt = message.text.strip()
+    # Descargar
+    if txt.isdigit():
+        indice = int(txt) - 1
         if 0 <= indice < len(data["archivos"]):
             archivo = data["archivos"][indice]
             await message.reply_document(document=archivo["file_id"], caption=archivo["caption"])
         else:
             await message.reply_text("❌ Número inválido. Usa /archivos para ver la lista.")
-    else:
-        # Ignorar textos que no sean números
-        return
+    # Eliminar
+    elif txt.lower().startswith("del "):
+        try:
+            num = int(txt.split()[1]) - 1
+            if 0 <= num < len(data["archivos"]):
+                archivo = data["archivos"].pop(num)
+                await message.reply_text(f"🗑️ Archivo eliminado: {archivo['caption']}")
+            else:
+                await message.reply_text("❌ Número inválido. Usa /archivos para ver la lista.")
+        except:
+            await message.reply_text("❌ Uso: del <número>")
 
 # --- Buscar ---
 @app.on_message(filters.command("buscar"))
