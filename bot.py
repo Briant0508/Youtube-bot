@@ -54,7 +54,7 @@ async def start(client, message):
         canal_ok = "❌"
     
     texto = (
-        "👋 **Bot de Almacenamiento**\n\n"
+        "👋 **Bot de Almacenamiento v3.0**\n\n"
         f"📊 **Estado actual:**\n"
         f"📋 Notas: {len(data['notas'])}\n"
         f"📂 Archivos: {len(data['archivos'])}\n"
@@ -71,7 +71,7 @@ async def start(client, message):
         "🎮 **Comandos rápidos:**\n"
         "• `número` - Descargar archivo (ej: `5`)\n"
         "• `del número` - Eliminar archivo (ej: `del 3`)\n\n"
-        "⚠️ **Importante para HostingGuru:**\n"
+        "⚠️ **Importante:**\n"
         "• Usa `/exportar` regularmente\n"
         "• Los archivos están SEGUROS en el canal"
     )
@@ -102,19 +102,23 @@ async def guardar_archivo(client, message):
             enviado = await client.send_document(CHANNEL_ID, message.document.file_id, caption=caption)
             nombre = message.document.file_name or caption
             file_id = message.document.file_id
+            tipo = "document"
         elif message.video:
             enviado = await client.send_video(CHANNEL_ID, message.video.file_id, caption=caption)
             nombre = message.video.file_name or caption
             file_id = message.video.file_id
+            tipo = "video"
         elif message.photo:
             enviado = await client.send_photo(CHANNEL_ID, message.photo.file_id, caption=caption)
             nombre = f"Imagen_{len(data['archivos'])+1}"
             file_id = message.photo.file_id
+            tipo = "photo"
 
         data["archivos"].append({
             "msg_id": enviado.id,
             "caption": nombre,
-            "file_id": file_id
+            "file_id": file_id,
+            "tipo": tipo
         })
         guardar_datos()
         await message.reply_text(f"📂 **Archivo guardado:** `{nombre}`")
@@ -134,7 +138,9 @@ async def lista(client, message):
         texto += "**📂 Archivos guardados:**\n"
         for i, f in enumerate(data["archivos"][:20], 1):
             nombre = f['caption'][:50]
-            texto += f"`{i}.` {nombre}\n"
+            # Mostrar emoji según el tipo
+            tipo_emoji = "🎬" if f.get("tipo") == "video" else "📄" if f.get("tipo") == "document" else "🖼️"
+            texto += f"{tipo_emoji} `{i}.` {nombre}\n"
         if len(data["archivos"]) > 20:
             texto += f"\n*... y {len(data['archivos'])-20} más*\n"
     
@@ -152,7 +158,7 @@ async def lista(client, message):
         texto += "• Escribe `del <número>` para eliminar"
         await message.reply_text(texto)
 
-# ==================== MANEJO DE ARCHIVOS (CORREGIDO) ====================
+# ==================== MANEJO DE ARCHIVOS (CORREGIDO CON DETECCIÓN DE TIPO) ====================
 
 @app.on_message(filters.text & ~filters.command(["start", "nota", "lista", "buscar", "exportar", "importar", "limpiar", "status", "reparar"]))
 async def manejar_archivos(client, message):
@@ -173,12 +179,27 @@ async def manejar_archivos(client, message):
                         archivo["msg_id"]
                     )
                 else:
-                    # Método 2: Usar file_id directamente
-                    await client.send_document(
-                        message.chat.id,
-                        archivo["file_id"],
-                        caption=archivo["caption"]
-                    )
+                    # Método 2: Usar file_id con detección de tipo
+                    file_id = archivo["file_id"]
+                    caption = archivo["caption"]
+                    tipo = archivo.get("tipo", "document")
+                    
+                    # Enviar según el tipo guardado
+                    if tipo == "video":
+                        await client.send_video(message.chat.id, file_id, caption=caption)
+                    elif tipo == "photo":
+                        await client.send_photo(message.chat.id, file_id, caption=caption)
+                    else:
+                        # Si es documento o no hay tipo, intentar como documento
+                        try:
+                            await client.send_document(message.chat.id, file_id, caption=caption)
+                        except Exception as e:
+                            # Si falla como documento, intentar como video
+                            if "DOCUMENT" in str(e) and "VIDEO" in str(e):
+                                await client.send_video(message.chat.id, file_id, caption=caption)
+                            else:
+                                raise e
+                
                 await message.reply_text(f"✅ **Descargado:** `{archivo['caption']}`")
             
             except Exception as e:
@@ -240,7 +261,8 @@ async def buscar(client, message):
     if archivos_encontrados:
         respuesta += "**📂 Archivos:**\n"
         for archivo in archivos_encontrados[:5]:
-            respuesta += f"• {archivo['caption'][:100]}\n"
+            tipo_emoji = "🎬" if archivo.get("tipo") == "video" else "📄" if archivo.get("tipo") == "document" else "🖼️"
+            respuesta += f"{tipo_emoji} {archivo['caption'][:100]}\n"
     
     await message.reply_text(respuesta)
 
@@ -252,10 +274,14 @@ async def exportar(client, message):
     
     try:
         export_data = {
-            "version": "2.0",
+            "version": "3.0",
             "notas": data["notas"],
             "archivos": [
-                {"caption": f["caption"], "file_id": f["file_id"]}
+                {
+                    "caption": f["caption"],
+                    "file_id": f["file_id"],
+                    "tipo": f.get("tipo", "document")
+                }
                 for f in data["archivos"]
             ]
         }
@@ -265,14 +291,28 @@ async def exportar(client, message):
         codigo = base64.b64encode(compressed).decode('ascii')
         
         await status_msg.delete()
-        await message.reply_text(
-            f"💾 **Copia de seguridad**\n\n"
-            f"📋 Notas: {len(data['notas'])}\n"
-            f"📂 Archivos: {len(data['archivos'])}\n\n"
-            f"```\n{codigo}\n```\n\n"
-            f"⚠️ **GUARDA ESTE CÓDIGO**\n"
-            f"Para restaurar: Responde a ESTE mensaje con `/importar`"
-        )
+        
+        # Si el código es muy largo, partirlo
+        if len(codigo) > 3500:
+            partes = [codigo[i:i+3500] for i in range(0, len(codigo), 3500)]
+            await message.reply_text(f"📦 **Backup grande** ({len(partes)} partes)\n\n")
+            for i, parte in enumerate(partes, 1):
+                await message.reply_text(f"**Parte {i}/{len(partes)}**\n\n```\n{parte}\n```")
+            await message.reply_text(
+                f"✅ **Backup completado**\n\n"
+                f"📋 Notas: {len(data['notas'])}\n"
+                f"📂 Archivos: {len(data['archivos'])}\n\n"
+                f"⚠️ Para restaurar: Responde a la **PRIMERA parte** con `/importar`"
+            )
+        else:
+            await message.reply_text(
+                f"💾 **Copia de seguridad**\n\n"
+                f"📋 Notas: {len(data['notas'])}\n"
+                f"📂 Archivos: {len(data['archivos'])}\n\n"
+                f"```\n{codigo}\n```\n\n"
+                f"⚠️ **GUARDA ESTE CÓDIGO**\n"
+                f"Para restaurar: Responde a ESTE mensaje con `/importar`"
+            )
     except Exception as e:
         await status_msg.edit_text(f"❌ **Error al exportar:** `{str(e)[:200]}`")
 
@@ -286,7 +326,7 @@ async def importar(client, message):
         )
         return
     
-    status_msg = await message.reply_text("⏳ **Restaurando copia de seguridad...**")
+    status_msg = await message.reply_text("⏳ **Restaurando copia de seguridad...**\n\nEsto puede tomar unos segundos...")
     
     try:
         codigo_texto = message.reply_to_message.text
@@ -305,23 +345,32 @@ async def importar(client, message):
             archivo = {
                 "msg_id": None,
                 "caption": a["caption"],
-                "file_id": a["file_id"]
+                "file_id": a["file_id"],
+                "tipo": a.get("tipo", "document")  # Mantener el tipo original
             }
             
             # Buscar el mensaje en el canal para obtener msg_id
             try:
                 async for msg in client.get_chat_history(CHANNEL_ID, limit=500):
+                    encontrado = False
+                    
                     if msg.document and msg.document.file_id == a["file_id"]:
                         archivo["msg_id"] = msg.id
-                        break
+                        archivo["tipo"] = "document"
+                        encontrado = True
                     elif msg.video and msg.video.file_id == a["file_id"]:
                         archivo["msg_id"] = msg.id
-                        break
+                        archivo["tipo"] = "video"
+                        encontrado = True
                     elif msg.photo and msg.photo.file_id == a["file_id"]:
                         archivo["msg_id"] = msg.id
+                        archivo["tipo"] = "photo"
+                        encontrado = True
+                    
+                    if encontrado:
                         break
             except:
-                pass  # Si no encuentra, queda None y usará file_id
+                pass  # Si no encuentra, queda None y usará file_id con el tipo guardado
             
             data["archivos"].append(archivo)
         
@@ -333,13 +382,14 @@ async def importar(client, message):
             f"✅ **Copia restaurada exitosamente**\n\n"
             f"📋 Notas: {len(data['notas'])}\n"
             f"📂 Archivos: {len(data['archivos'])}\n"
-            f"📡 msg_id recuperados: {msg_ids_encontrados}/{len(data['archivos'])}\n\n"
-            f"💡 Los archivos sin msg_id usarán file_id automáticamente."
+            f"📡 msg_id recuperados: {msg_ids_encontrados}/{len(data['archivos'])}\n"
+            f"🎬 Tipos de archivo: Documentos/{sum(1 for a in data['archivos'] if a.get('tipo')=='document')} | Videos/{sum(1 for a in data['archivos'] if a.get('tipo')=='video')} | Fotos/{sum(1 for a in data['archivos'] if a.get('tipo')=='photo')}\n\n"
+            f"💡 Ahora puedes descargar los archivos con sus números."
         )
     except Exception as e:
         await status_msg.edit_text(f"❌ **Error al importar:** `{str(e)[:200]}`")
 
-# ==================== REPARAR ARCHIVOS ====================
+# ==================== REPARAR ARCHIVOS (MEJORADO) ====================
 
 @app.on_message(filters.command("reparar"))
 async def reparar(client, message):
@@ -347,23 +397,40 @@ async def reparar(client, message):
     
     reparados = 0
     fallidos = 0
+    tipos_corregidos = 0
     
     for i, archivo in enumerate(data["archivos"]):
         if archivo.get("msg_id") is None:
             # Intentar obtener el mensaje por file_id
             try:
                 async for msg in client.get_chat_history(CHANNEL_ID, limit=1000):
+                    encontrado = False
+                    
                     if msg.document and msg.document.file_id == archivo["file_id"]:
                         archivo["msg_id"] = msg.id
+                        if archivo.get("tipo") != "document":
+                            archivo["tipo"] = "document"
+                            tipos_corregidos += 1
+                        encontrado = True
                         reparados += 1
-                        break
+                        
                     elif msg.video and msg.video.file_id == archivo["file_id"]:
                         archivo["msg_id"] = msg.id
+                        if archivo.get("tipo") != "video":
+                            archivo["tipo"] = "video"
+                            tipos_corregidos += 1
+                        encontrado = True
                         reparados += 1
-                        break
+                        
                     elif msg.photo and msg.photo.file_id == archivo["file_id"]:
                         archivo["msg_id"] = msg.id
+                        if archivo.get("tipo") != "photo":
+                            archivo["tipo"] = "photo"
+                            tipos_corregidos += 1
+                        encontrado = True
                         reparados += 1
+                    
+                    if encontrado:
                         break
                 else:
                     fallidos += 1
@@ -376,10 +443,11 @@ async def reparar(client, message):
     await status_msg.edit_text(
         f"✅ **Reparación completada**\n\n"
         f"🔧 Reparados: {reparados}\n"
+        f"🏷️ Tipos corregidos: {tipos_corregidos}\n"
         f"❌ Fallidos: {fallidos}\n"
         f"📂 Total archivos: {len(data['archivos'])}\n\n"
-        f"💡 Los archivos fallidos probablemente fueron eliminados del canal.\n"
-        f"   Puedes eliminarlos con `del <número>`"
+        f"💡 Ahora intenta descargar de nuevo con el número del archivo.\n"
+        f"Los archivos fallidos probablemente fueron eliminados del canal."
     )
 
 # ==================== ESTADO Y MANTENIMIENTO ====================
@@ -389,13 +457,23 @@ async def status(client, message):
     msg_id_validos = sum(1 for a in data["archivos"] if a.get("msg_id") is not None)
     msg_id_invalidos = len(data["archivos"]) - msg_id_validos
     
+    videos = sum(1 for a in data["archivos"] if a.get("tipo") == "video")
+    documentos = sum(1 for a in data["archivos"] if a.get("tipo") == "document")
+    fotos = sum(1 for a in data["archivos"] if a.get("tipo") == "photo")
+    sin_tipo = len(data["archivos"]) - (videos + documentos + fotos)
+    
     texto = (
-        f"📊 **Estado del Bot**\n\n"
+        f"📊 **Estado del Bot v3.0**\n\n"
         f"📋 Notas en memoria: `{len(data['notas'])}`\n"
         f"📂 Archivos en memoria: `{len(data['archivos'])}`\n"
         f"   ├─ Con msg_id válido: `{msg_id_validos}`\n"
-        f"   └─ Sin msg_id (usarán file_id): `{msg_id_invalidos}`\n"
-        f"💾 Datos guardados en disco: `{'Sí' if os.path.exists(DATA_FILE) else 'No'}`\n\n"
+        f"   └─ Sin msg_id (usarán file_id): `{msg_id_invalidos}`\n\n"
+        f"🎬 **Tipos de archivo:**\n"
+        f"   ├─ Videos: `{videos}`\n"
+        f"   ├─ Documentos: `{documentos}`\n"
+        f"   ├─ Fotos: `{fotos}`\n"
+        f"   └─ Sin tipo: `{sin_tipo}`\n\n"
+        f"💾 Datos guardados en disco: `{'Sí' if os.path.exists(DATA_FILE) else 'No'}`\n"
         f"📡 Canal: `{CHANNEL_ID}`\n\n"
         f"💡 **Recomendaciones:**\n"
         f"• Usa `/exportar` para hacer backup\n"
@@ -408,7 +486,7 @@ async def status(client, message):
 async def limpiar_memoria(client, message):
     if len(message.command) > 1 and message.command[1].lower() == "confirmar":
         data["notas"].clear()
-        data["archivos"].clear()
+         data["archivos"].clear()
         guardar_datos()
         await message.reply_text(
             "🧹 **Memoria limpiada exitosamente**\n\n"
@@ -430,12 +508,12 @@ async def limpiar_memoria(client, message):
 
 # ==================== INICIO ====================
 
-print("=" * 50)
-print("🚀 Bot de Almacenamiento iniciado")
+print("=" * 60)
+print("🚀 Bot de Almacenamiento v3.0 iniciado")
 print(f"📡 Canal: {CHANNEL_ID}")
 print(f"📋 Notas cargadas: {len(data['notas'])}")
 print(f"📂 Archivos cargados: {len(data['archivos'])}")
 print(f"💾 Archivo de datos: {DATA_FILE}")
-print("=" * 50)
+print("=" * 60)
 
 app.run()
