@@ -87,27 +87,25 @@ async def archivos(client, message):
 @app.on_message(filters.text)
 async def manejar_archivos(client, message):
     txt = message.text.strip()
+
     # Descargar
     if txt.isdigit():
         indice = int(txt) - 1
         if 0 <= indice < len(data["archivos"]):
             archivo = data["archivos"][indice]
-            if "file_id" in archivo:
-    try:
-        # Intentar como documento
-        await message.reply_document(archivo["file_id"], caption=archivo["caption"])
-    except:
-        try:
-            # Intentar como video
-            await message.reply_video(archivo["file_id"], caption=archivo["caption"])
-        except:
             try:
-                # Intentar como foto
-                await message.reply_photo(archivo["file_id"], caption=archivo["caption"])
+                await message.reply_document(archivo["file_id"], caption=archivo["caption"])
             except:
-                await message.reply_text("❌ No pude enviar el archivo, revisa el tipo.")
+                try:
+                    await message.reply_video(archivo["file_id"], caption=archivo["caption"])
+                except:
+                    try:
+                        await message.reply_photo(archivo["file_id"], caption=archivo["caption"])
+                    except:
+                        await message.reply_text("❌ No pude enviar el archivo, revisa el tipo.")
         else:
             await message.reply_text("❌ Número inválido. Usa /archivos para ver la lista.")
+
     # Eliminar
     elif txt.lower().startswith("del "):
         try:
@@ -144,7 +142,11 @@ async def buscar(client, message):
 # --- Reconstrucción ---
 @app.on_message(filters.command("reconstruir"))
 async def reconstruir(client, message):
-    async for msg in client.get_chat_history(CHANNEL_ID, limit=200):
+    data["tareas"].clear()
+    data["notas"].clear()
+    data["archivos"].clear()
+
+    async for msg in client.get_chat_history(CHANNEL_ID, limit=500):
         if msg.text and msg.text.startswith("TAREA|"):
             _, texto, fecha, estado = msg.text.split("|")
             data["tareas"].append({"texto": texto, "fecha": fecha, "completada": estado == "True"})
@@ -154,6 +156,7 @@ async def reconstruir(client, message):
         elif msg.text and msg.text.startswith("ARCHIVO|"):
             _, file_id, caption = msg.text.split("|", 2)
             data["archivos"].append({"file_id": file_id, "caption": caption})
+
     await message.reply_text("✅ Memoria reconstruida desde el canal.")
 
 # --- Comando de prueba ---
